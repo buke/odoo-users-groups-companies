@@ -46,7 +46,7 @@ class ir_rule(osv.osv):
                 AND r.perm_""" + mode + """
                 AND (r.id IN (SELECT rule_group_id FROM rule_group_rel g_rel
                             JOIN res_groups_users_rel u_rel ON (g_rel.group_id = u_rel.gid)
-                            WHERE u_rel.uid = %s) OR r.global)""", (model_name, uid))
+                            WHERE u_rel.uid = %s and u_rel.active = True) OR r.global)""", (model_name, uid))
         rule_ids = [x[0] for x in cr.fetchall()]
         if rule_ids:
             # browse user as super-admin root to avoid access errors!
@@ -81,11 +81,12 @@ class ir_rule(osv.osv):
 
                 cr.execute("""SELECT company_id
                         FROM res_groups_users_rel
-                        WHERE uid = %s and gid in %s
+                        WHERE uid = %s and gid in %s and active = True
                         """, (uid, tuple(group_ids)))
                 company_ids = [x[0] for x in cr.fetchall() if x[0]]
                 company_domain = [('company_id', 'child_of', company_ids)]
                 domain = expression.OR([domain] + [company_domain])
+
             return domain
         return []
 
@@ -102,6 +103,6 @@ class ir_rule(osv.osv):
 
     def clear_cache(self, cr, uid):
         super(ir_rule, self).clear_cache(cr, uid)
-        # self._compute_domain2.clear_cache(self)
+        self._compute_domain2.clear_cache(self)
 
 # vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

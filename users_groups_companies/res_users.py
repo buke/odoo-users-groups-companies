@@ -46,6 +46,8 @@ class res_users_groups_companies(osv.osv):
         'uid': fields.many2one('res.users', 'Users'),
         'gid': fields.many2one('res.groups', 'Groups'),
         'company_id': fields.many2one('res.company', 'Company', context={'user_preference': True}),
+        'active': fields.boolean('Active'),
+        'transfer': fields.boolean('Transfer', help='Can transfer to Other'),
     }
 
     _sql_constraints = [
@@ -67,7 +69,22 @@ class res_users_groups_companies(osv.osv):
 
     _defaults = {
         'company_id': _get_company,
+        'active': True,
+        'transfer': False,
     }
+
+    def create(self, cr, uid, data, context=None):
+        self.pool.get('ir.rule').clear_cache(cr, uid)
+        return super(res_users_groups_companies, self).create(cr, uid, data, context=context)
+
+    def write(self, cr, uid, ids, values, context=None):
+        self.pool.get('ir.rule').clear_cache(cr, uid)
+        return super(res_users_groups_companies, self).write(cr, uid, ids, values, context=context)
+
+    def unlink(self, cr, uid, ids, context=None):
+        self.pool.get('ir.rule').clear_cache(cr, uid)
+        return super(res_users_groups_companies, self).unlink(cr, uid, ids, context)
+
 
 
 def name_boolean_group(id, company_id):
@@ -121,10 +138,19 @@ class res_users(osv.osv):
     _inherit = 'res.users'
 
     def _create_ugc(self, cr, uid, user_id, group_id, company_id, context=None):
-        cr.execute('insert into res_groups_users_rel (uid,gid,company_id) values (%s,%s,%s)', (user_id, group_id, company_id))
+        group_ids = [g.id for g in self.pool.get('res.groups').browse(cr, SUPERUSER_ID, group_id, context=context).trans_implied_ids]
+        for gid in group_ids:
+            # self._create_ugc(cr, uid, user_id, gid, company_id, context=context)
+            cr.execute('insert into res_groups_users_rel (uid,gid,company_id, active) values (%s,%s,%s,True)', (user_id, gid, company_id))
+        cr.execute('insert into res_groups_users_rel (uid,gid,company_id, active) values (%s,%s,%s,True)', (user_id, group_id, company_id))
 
     def _unlink_ugc(self, cr, uid, user_id, group_id, company_id, context=None):
+        group_ids = [g.id for g in self.pool.get('res.groups').browse(cr, SUPERUSER_ID, group_id, context=context).trans_implied_ids]
+        for gid in group_ids:
+            # self._unlink_ugc(cr, uid, user_id, gid, company_id, context=context)
+            cr.execute('delete from res_groups_users_rel where uid=%s and gid=%s and company_id=%s', (user_id, gid, company_id))
         cr.execute('delete from res_groups_users_rel where uid=%s and gid=%s and company_id=%s', (user_id, group_id, company_id))
+
 
     def write(self, cr, uid, ids, values, context=None):
         if not isinstance(ids, list):
@@ -155,6 +181,8 @@ class res_users(osv.osv):
         return res
 
     def _update_fields(self, cr, uid, company_ids=None, context=None):
+        if context is None:
+            context = {}
         res = {}
         if company_ids is None:
             company_ids = self.pool.get('res.company').search(cr, uid, [])
@@ -263,10 +291,11 @@ class res_users(osv.osv):
 
         if user_form_view_id == view_id:
             result['fields'].update(self.fields_get(cr, uid))
-            print result['arch']
             eview = etree.fromstring(result['arch'])
+            eviews = eview.xpath("//page")
             access_page = eview.xpath("//page")[0]
             for company_id in company_ids:
+                # continue # 禁用
                 company_group_page = self._build_group_page(cr, uid, company_id)
                 access_page.addnext(company_group_page)
             access_page.getparent().remove(access_page)
@@ -289,15 +318,79 @@ class res_users(osv.osv):
 
     # @tools.ormcache(skiparg=3)
     def has_company_group(self, cr, uid, user_id, group_id, company_id):
-        cr.execute("SELECT 1 FROM res_groups_users_rel WHERE uid=%s AND gid=%s and company_id=%s", (user_id, group_id, company_id))
+        cr.execute("SELECT 1 FROM res_groups_users_rel WHERE uid=%s AND gid=%s and company_id=%s and active = True", (user_id, group_id, company_id))
         return bool(cr.fetchone())
 
     # @tools.ormcache(skiparg=3)
     def company_group_option(self, cr, uid, user_id, group_ids, company_id):
-        cr.execute("SELECT gid FROM res_groups_users_rel WHERE uid=%s AND gid in %s and company_id=%s", (user_id, tuple(group_ids), company_id))
-        res = cr.fetchone()
-        return res[0] if res else False
+        cr.execute("SELECT gid FROM res_groups_users_rel WHERE uid=%s AND gid in %s and company_id=%s and active = True", (user_id, tuple(group_ids), company_id))
+        res = cr.fetchall()
+        return res[-1] if res else False
 
+    @tools.ormcache(skiparg=2)
+    def has_group(self, cr, uid, group_ext_id):
+        """Checks whether user belongs to given group.
+
+        :param str group_ext_id: external ID (XML ID) of the group.
+           Must be provided in fully-qualified form (``module.ext_id``), as there
+           is no implicit module to use..
+        :return: True if the current user is a member of the group with the
+           given external ID (XML ID), else False.
+        """
+        assert group_ext_id and '.' in group_ext_id, "External ID must be fully qualified"
+        module, ext_id = group_ext_id.split('.')
+        cr.execute("""SELECT 1 FROM res_groups_users_rel WHERE active = True AND uid=%s AND gid IN
+                        (SELECT res_id FROM ir_model_data WHERE module=%s AND name=%s)""",
+                   (uid, module, ext_id))
+        return bool(cr.fetchone())
+
+
+class groups_view(osv.osv):
+    _inherit = 'res.groups'
+
+    def get_application_groups(self, cr, uid, domain=None, context=None):
+        return self.search(cr, uid, domain or [])
+
+    def get_groups_by_application(self, cr, uid, context=None):
+        """ return all groups classified by application (module category), as a list of pairs:
+                [(app, kind, [group, ...]), ...],
+            where app and group are browse records, and kind is either 'boolean' or 'selection'.
+            Applications are given in sequence order.  If kind is 'selection', the groups are
+            given in reverse implication order.
+        """
+        def linearized(gs):
+            gs = set(gs)
+            # determine sequence order: a group should appear after its implied groups
+            order = dict.fromkeys(gs, 0)
+            for g in gs:
+                for h in gs.intersection(g.trans_implied_ids):
+                    order[h] -= 1
+            # check whether order is total, i.e., sequence orders are distinct
+            if len(set(order.itervalues())) == len(gs):
+                return sorted(gs, key=lambda g: order[g])
+            return None
+
+        # classify all groups by application
+
+        gids = self.get_application_groups(cr, uid, context=context)
+        by_app, others = {}, []
+        for g in self.browse(cr, uid, gids, context):
+            if g.category_id:
+                by_app.setdefault(g.category_id, []).append(g)
+            else:
+                others.append(g)
+        # build the result
+        res = []
+        apps = sorted(by_app.iterkeys(), key=lambda a: a.sequence or 0)
+        for app in apps:
+            gs = linearized(by_app[app])
+            if gs:
+                res.append((app, 'selection', gs))
+            else:
+                res.append((app, 'boolean', by_app[app]))
+        if others:
+            res.append((False, 'boolean', others))
+        return res
 
 
 # vim:expandtab:smartindent:tabstop=4:softtabstop=4:shiftwidth=4:

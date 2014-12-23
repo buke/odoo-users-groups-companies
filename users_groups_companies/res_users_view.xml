@@ -12,5 +12,44 @@
                 </xpath>
             </field>
         </record>
+
+        <record id="view_ugc_filter" model="ir.ui.view">
+            <field name="name">ugc.select</field>
+            <field name="model">res.users.groups.companies</field>
+            <field name="arch" type="xml">
+                <search string="Search Partner">
+                   <group expand="0" string="Group By">
+                       <filter string="User" context="{'group_by' : 'uid'}" />
+                       <filter string="Group" context="{'group_by' : 'gid'}" />
+                       <filter string="Company" context="{'group_by' : 'company_id'}" />
+                       <filter string="Active" context="{'group_by' : 'active'}" />
+                   </group>
+               </search>
+            </field>
+        </record>
+
+        <record id="view_ugc_tree" model="ir.ui.view">
+            <field name="name">ugc.tree</field>
+            <field name="model">res.users.groups.companies</field>
+            <field name="arch" type="xml">
+                <tree string="Users" editable="top">
+                    <field name="uid"/>
+                    <field name="gid"/>
+                    <field name="company_id"/>
+                    <field name="active"/>
+                    <field name="transfer"/>
+                </tree>
+            </field>
+        </record>
+
+        <record id="action_ugc" model="ir.actions.act_window">
+            <field name="name">Companies</field>
+            <field name="type">ir.actions.act_window</field>
+            <field name="res_model">res.users.groups.companies</field>
+            <field name="view_type">form</field>
+            <field name="search_view_id" ref="view_ugc_filter"/>
+        </record>
+        <menuitem action="action_ugc" id="menu_action_res_ugc" parent="base.menu_users" groups="base.group_no_one"/>
+
     </data>
 </openerp>
